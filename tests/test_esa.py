@@ -57,6 +57,7 @@ class FakeCloud:
         self.current = {"protocol": "HTTPS", "name": "manual", "cert": None}
         self.creates = self.deletes = self.uploads = self.installs = 0
         self.create_mode = self.upload_mode = self.install_mode = "ok"
+        self.upload_tokens = []
         self.route = {"path": "/original"}
 
     def validate_site(self):
@@ -82,7 +83,10 @@ class FakeCloud:
         return self.certs.get(name)
 
     def upload(self, name, cert, key, token):
+        if not key.startswith("-----BEGIN RSA PRIVATE KEY-----"):
+            raise AssertionError("FC selectable CAS certificate requires RSA PKCS#1 PEM")
         self.uploads += 1
+        self.upload_tokens.append(token)
         if self.upload_mode != "absent":
             self.certs[name] = {"id": self.uploads, "cert": cert, "key": key}
         if self.upload_mode != "ok":
@@ -348,6 +352,36 @@ class Tests(unittest.TestCase):
         self.assertTrue(a["cert_name"].startswith(engine.PREFIX))
         self.assertLessEqual(len(a["cert_name"]), 63)
         self.assertEqual((self.issues, self.cloud.uploads), (1, 1))
+
+    def test_certbot_pkcs8_is_uploaded_as_same_rsa_key_in_pkcs1(self):
+        private = serialization.load_pem_private_key(self.key.encode(), password=None)
+        pkcs8 = private.private_bytes(serialization.Encoding.PEM,
+                                      serialization.PrivateFormat.PKCS8,
+                                      serialization.NoEncryption()).decode()
+        self.assertTrue(pkcs8.startswith("-----BEGIN PRIVATE KEY-----"))
+        self.issued_material = (self.cert, pkcs8)
+        result = self.run_event()
+        uploaded = self.cloud.certs[result["cert_name"]]
+        self.assertEqual(uploaded["key"], self.key)
+        self.assertEqual(uploaded["cert"], self.cert)
+        with patch("engine.install") as install:
+            self.run_event("renew")
+        self.assertEqual(install.call_args.args[4], self.key)
+        self.assertEqual((self.issues, self.cloud.uploads), (1, 1))
+
+    def test_legacy_pkcs8_upload_migrates_once_without_acme_or_deletion(self):
+        first = self.run_event()
+        old = self.cloud.certs[first["cert_name"]]
+        old["key"] = serialization.load_pem_private_key(self.key.encode(), password=None).private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption()).decode()
+        second = self.run_event()
+        self.assertEqual(second["cert_name"], first["cert_name"] + "-rsa")
+        self.assertEqual(self.cloud.certs[second["cert_name"]]["key"], self.key)
+        self.assertIs(self.cloud.certs[first["cert_name"]], old)
+        self.assertNotEqual(*self.cloud.upload_tokens)
+        self.assertEqual(self.run_event(), second)
+        self.assertEqual((self.issues, self.cloud.uploads, len(self.cloud.certs)), (1, 2, 2))
 
     def test_upload_timeout_committed_recovers_by_name_and_material(self):
         self.cloud.upload_mode = "committed"

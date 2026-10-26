@@ -14,6 +14,7 @@
 - 换证顺序：新签发 → 新名称上传 CAS → 按名称读回并校验证书/私钥 → 只更新 FC `certConfig` → 读回 FC 叶证书指纹 → 实际 TLS 校验证书链、主机名、叶证书指纹。TLS 连接使用用户审核过的 FC 源站连接主机，SNI 使用业务域名。
 - **不删除任何旧 CAS 证书**。新名称仍带 `devs-certbot-generated-` 前缀；新入口下一轮按显式目标和 NAS 状态继续管理，不依赖旧名称扫描。保留旧证书可能积累费用/配额，清理必须制定显式保留期、引用检查和独立权限策略。
 - Certbot 与 shell/hook 使用独立 Unix 进程组。超时、异常及父进程退出后，先 TERM、再按需 KILL，确认整个进程组消失后才进行 cleanup 或释放锁；无法确认则撤销 owner token 的有效期并隔离保留锁，阻止下一执行。
+- Certbot 的 RSA PKCS#8 私钥在发送 CAS/FC 前用已固定的 cryptography 转为 RSA PKCS#1 PEM，密钥和证书不变。若 NAS journal 对应的旧 CAS 上传仍是 PKCS#8，则保留旧上传，以原名称加 `-rsa` 的独立 CAS 名称/ClientToken 上传兼容格式并读回；复用现有证书，不再发 ACME 请求。原始 Certbot 私钥继续受限保存，不在日志输出。
 - SDK 禁用自动重试。DNS/CAS 未知结果只读回，仍未知则失败并保留意图；FC 更新未知先读回，下一次调用再次读回后才决定是否重发。成功候选会复用，避免 FC/TLS 失败导致重新签发。
 
 ## 先决条件与权限审查
