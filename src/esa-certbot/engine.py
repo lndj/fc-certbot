@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import shlex
+import signal
 import socket
 import ssl
 import subprocess
@@ -43,6 +44,60 @@ def validate_material(cert, key, domain):
         raise Failure("CERT_KEY_MISMATCH")
 
 
+def stop_certbot_group(process, grace=2):
+    """Reap our child and confirm its entire Unix process group has disappeared."""
+    def gone():
+        process.poll()  # Reap the direct child; killpg also detects live descendants.
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        return False
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if gone():
+            return True
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            return gone()
+        except OSError:
+            return False
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            if gone():
+                return True
+            time.sleep(0.05)
+    return gone()
+
+
+def run_certbot(args, env, lock, timeout=600):
+    lock.check()
+    process = subprocess.Popen(args, env=env, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, start_new_session=True)
+    def finish_group():
+        try:
+            stopped = stop_certbot_group(process)
+        except BaseException:
+            stopped = False
+        if not stopped:
+            lock.quarantine()
+            raise Failure("ACME_PROCESS_GROUP_UNCONFIRMED") from None
+    try:
+        code = process.wait(timeout=timeout)
+    except BaseException as exc:
+        finish_group()
+        if isinstance(exc, subprocess.TimeoutExpired):
+            raise Failure("ACME_TIMEOUT") from None
+        raise
+    # A failed or successful parent may leave descendants behind. Neither permits
+    # cleanup or lock release until those processes have also stopped.
+    finish_group()
+    if code != 0:
+        raise Failure("ACME_FAILED")
+
+
 def issue(cfg, target, run, credentials, account, lock):
     # Each generation has its own lineage; account/config/key data stay on private NAS.
     config = run / "letsencrypt"
@@ -63,10 +118,7 @@ def issue(cfg, target, run, credentials, account, lock):
                 "--preferred-challenges", "dns", "--key-type", "rsa", "--rsa-key-size", "2048",
                 "--cert-name", "managed", "--email", cfg["email"],
                 "--server", cfg["acme_directory"], "--domains", target["domain"]]
-        lock.check()
-        result = subprocess.run(args, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
-        if result.returncode != 0:
-            raise Failure("ACME_FAILED")
+        run_certbot(args, env, lock)
     if not cert_path.exists() or not key_path.exists():
         raise Failure("ACME_OUTPUT_MISSING")
     cert, key = cert_path.read_text(), key_path.read_text()
@@ -197,7 +249,8 @@ def run(cfg, event, root, cloud, credentials, account, issuer=issue, verifier=ve
             try:
                 cert, key = issuer(cfg, target, generation, credentials, account, lock)
             finally:
-                cleanup(cloud, target, generation, lock.check)
+                if not lock.quarantined:
+                    cleanup(cloud, target, generation, lock.check)
             validate_material(cert, key, target["domain"])
             candidate.update(fingerprint=fingerprint(cert), name=PREFIX + fingerprint(cert)[:32])
             save()

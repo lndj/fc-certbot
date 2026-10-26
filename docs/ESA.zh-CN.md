@@ -13,6 +13,7 @@
 - 每次挑战持久化随机备注、token、RecordId。创建超时先按 SiteId、完整名称、类型、值、随机备注精确读回；查不到即停止，不盲目再创建。cleanup 只删除这些字段均匹配的本次 RecordId；同名其他 TXT 保留，删除结果未知也读回。
 - 换证顺序：新签发 → 新名称上传 CAS → 按名称读回并校验证书/私钥 → 只更新 FC `certConfig` → 读回 FC 叶证书指纹 → 实际 TLS 校验证书链、主机名、叶证书指纹。TLS 连接使用用户审核过的 FC 源站连接主机，SNI 使用业务域名。
 - **不删除任何旧 CAS 证书**。新名称仍带 `devs-certbot-generated-` 前缀；新入口下一轮按显式目标和 NAS 状态继续管理，不依赖旧名称扫描。保留旧证书可能积累费用/配额，清理必须制定显式保留期、引用检查和独立权限策略。
+- Certbot 与 shell/hook 使用独立 Unix 进程组。超时、异常及父进程退出后，先 TERM、再按需 KILL，确认整个进程组消失后才进行 cleanup 或释放锁；无法确认则撤销 owner token 的有效期并隔离保留锁，阻止下一执行。
 - SDK 禁用自动重试。DNS/CAS 未知结果只读回，仍未知则失败并保留意图；FC 更新未知先读回，下一次调用再次读回后才决定是否重发。成功候选会复用，避免 FC/TLS 失败导致重新签发。
 
 ## 先决条件与权限审查
@@ -141,9 +142,10 @@ npx --yes @serverless-devs/s@3.1.10 -t s-esa.local.yaml deploy
 
 NAS 每个目标使用原子 `mkdir` 锁，目录中以随机 owner 命名的 token 存储 owner 和 1200 秒到期时间，函数超时配置为 900 秒。每个变更阶段及 hook 检查 owner/到期时间。正常退出仅移除自己的 token；旧 owner 丢失 token 后不能释放新 owner 的锁。**到期只报告，不自动抢锁**，这是避免旧执行仍在云端完成写入的保守取舍，不承诺自动故障转移或 exactly-once。
 
+- `ACME_PROCESS_GROUP_UNCONFIRMED` / `LOCK_QUARANTINED`：禁止 cleanup 和自动释放锁。先停 timer，确认相应 FC 实例中整个 Certbot/shell/hook 进程组已终止（必要时由操作者回收实例），再核查可能在途的云请求。保留隔离锁及挑战 journal；确认安全后才能人工恢复，不能仅因主调用返回或锁到期而重入。
 - `LOCK_BUSY`：不排队、不签发；稍后重试。`LOCK_STALE`/空锁目录：先禁用对应 timer，并通过 FC 确认旧执行和 hook 均已终止、外部云请求已稳定；再把整个旧锁目录重命名至隔离位置保存证据，重新调用。绝不能仅凭墙钟到期删除仍在工作的锁。
 - `DNS_CREATE_UNKNOWN`：保留 `challenges/*.json`。按本次随机备注、SiteId、完整名称和 token 复查 ESA 与审计日志，未知时不得重复创建。记录后来可见后重试，cleanup 会只回收匹配的 ID。只有明确确认创建**未执行**后，才能在停机审核下重置该意图；不能以一次列表为空作为未执行证明。
-- `DNS_OWNERSHIP_CHANGED`/`DNS_OWNERSHIP_AMBIGUOUS`：不要自动删除，人工逐条核对。`DNS_CLEANUP_FAILED`：保留状态，下一轮继续精确清理。失败会阻止进一步签发，不会擅自删除其他 TXT。
+- `DNS_OWNERSHIP_CHANGED`/`DNS_OWNERSHIP_AMBIGUOUS`：不要自动删除，人工逐条核对。`DNS_CLEANUP_FAILED` / `DNS_CLEANUP_UNCONFIRMED`：保留状态，下一轮继续精确清理。未知创建恢复时使用同一次查询返回的记录；没有持久化删除意图时，一次空列表不会被当作已清理。失败会阻止进一步签发，不会擅自删除其他 TXT。
 - `CAS_UPLOAD_UNKNOWN`：候选文件、固定名称及 SHA256 ClientToken 已保留。先按名称读回 CAS 并核对实际证书/私钥，下一轮发现成功上传即可复用。仍未知不重传；明确未执行后才可在受控恢复中重置 `cas_attempted`，再次上传使用同一 token。不能删除旧证书腾位置来掩盖失败。
 - `FC_UPDATE_UNCONFIRMED`：旧 CAS 保留。下一轮先读 FC；已经安装新候选则仅核验 TLS，仍是旧受管指纹才重发 `certConfig`，其他指纹立即冲突停止。
 - `TLS_VERIFY_FAILED`：FC 可能已换成候选，但还未标记 verified，不自动删除或回滚；检查 FC 源站连接主机、SNI、公信链、出网和传播，再重试。不会因为验证失败重复签发。

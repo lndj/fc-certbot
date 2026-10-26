@@ -31,6 +31,8 @@ import dns.flags
 import dns.message
 import dns.rrset
 
+REAL_SLEEP = time.sleep
+
 
 def material(days=90, domain="api.example.com"):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -214,6 +216,44 @@ class Tests(unittest.TestCase):
         dns01.cleanup(self.cloud, self.target, self.root, lambda: None)
         self.assertEqual(self.cloud.deletes, 1)
         self.assertEqual(self.cloud.txt, [])
+
+    def test_cleanup_unknown_create_uses_newly_visible_recovered_record(self):
+        item = dns01.create(self.cloud, self.target, self.root, "token", lambda: None)
+        path = next((self.root / "challenges").glob("*.json"))
+        item["id"] = None  # Create committed, but the RecordId was never journaled.
+        write(path, item)
+        actual_records = self.cloud.records
+        snapshots = []
+        def delayed_visibility(name):
+            records = [] if not snapshots else actual_records(name)
+            snapshots.append(records)
+            return records
+        self.cloud.records = Mock(side_effect=delayed_visibility)
+        dns01.cleanup(self.cloud, self.target, self.root, lambda: None)
+        self.assertEqual(len(snapshots), 3)  # empty -> recovered record -> deleted
+        self.assertEqual(self.cloud.deletes, 1)
+        self.assertEqual(self.cloud.txt, [])
+        self.assertTrue(read(path)["deleted"])
+        self.assertEqual(self.cloud.creates, 1)
+
+    def test_cleanup_empty_list_without_delete_intent_is_unconfirmed(self):
+        dns01.create(self.cloud, self.target, self.root, "token", lambda: None)
+        path = next((self.root / "challenges").glob("*.json"))
+        self.cloud.records = Mock(return_value=[])
+        with self.assertRaisesRegex(Failure, "DNS_CLEANUP_UNCONFIRMED"):
+            dns01.cleanup(self.cloud, self.target, self.root, lambda: None)
+        self.assertFalse(read(path).get("deleted", False))
+        self.assertEqual(self.cloud.deletes, 0)
+
+    def test_cleanup_crash_after_delete_recovers_without_second_delete(self):
+        item = dns01.create(self.cloud, self.target, self.root, "token", lambda: None)
+        path = next((self.root / "challenges").glob("*.json"))
+        item["delete_attempted"] = True
+        write(path, item)
+        self.cloud.delete_txt(item["id"])
+        dns01.cleanup(self.cloud, self.target, self.root, lambda: None)
+        self.assertTrue(read(path)["deleted"])
+        self.assertEqual(self.cloud.deletes, 1)
 
     def test_propagation_bounded_timeout_and_retry(self):
         clock = [0]
@@ -479,24 +519,83 @@ class Tests(unittest.TestCase):
         live.mkdir(parents=True)
         (live / "fullchain.pem").write_text(self.cert)
         (live / "privkey.pem").write_text(self.key)
-        with Lock(self.root) as lock, patch("engine.subprocess.run") as certbot:
+        with Lock(self.root) as lock, patch("engine.run_certbot") as certbot:
             result = engine.issue(self.cfg, self.target, self.root, {}, "123", lock)
         self.assertEqual(result, (self.cert, self.key))
         certbot.assert_not_called()
 
     def test_certbot_failure_output_suppressed_and_cleanup_hooks_configured(self):
-        with Lock(self.root) as lock, patch("engine.subprocess.run") as subprocess_run:
-            subprocess_run.return_value.returncode = 1
+        with Lock(self.root) as lock, patch("engine.subprocess.Popen") as popen, \
+                patch("engine.stop_certbot_group", return_value=True):
+            popen.return_value.wait.return_value = 1
             with self.assertRaisesRegex(Failure, "ACME_FAILED"):
                 engine.issue(self.cfg, self.target, self.root, {"security_token": "PRIVATE"}, "123", lock)
-            kwargs = subprocess_run.call_args.kwargs
+            kwargs = popen.call_args.kwargs
             self.assertEqual(kwargs["stdout"], engine.subprocess.DEVNULL)
             self.assertEqual(kwargs["stderr"], engine.subprocess.DEVNULL)
-            self.assertEqual(kwargs["timeout"], 600)
-            args = subprocess_run.call_args.args[0]
+            self.assertTrue(kwargs["start_new_session"])
+            popen.return_value.wait.assert_called_once_with(timeout=600)
+            args = popen.call_args.args[0]
             self.assertIn("--manual-cleanup-hook", args)
             self.assertIn("--manual-auth-hook", args)
             self.assertNotIn("your_mail@mail.com", args)
+
+    def test_real_certbot_descendants_stop_before_cleanup_and_cannot_write_late(self):
+        real_run_certbot = engine.run_certbot
+        for mode in ("timeout", "parent-error"):
+            with self.subTest(mode=mode):
+                base = self.root / mode
+                ready, started, marker = (base / n for n in ("group", "worker-ready", "late-marker"))
+                worker = ("import time; from pathlib import Path; "
+                          f"Path({str(started)!r}).write_text('ready'); time.sleep(3); "
+                          f"Path({str(marker)!r}).write_text('late')")
+                hook = ("import subprocess, sys, time; "
+                        f"subprocess.Popen([sys.executable, '-c', {worker!r}]); time.sleep(30)")
+                parent = ("import os, subprocess, sys, time; from pathlib import Path\n"
+                          f"subprocess.Popen([sys.executable, '-c', {hook!r}])\n"
+                          f"while not Path({str(started)!r}).exists(): time.sleep(0.01)\n"
+                          f"Path({str(ready)!r}).write_text(str(os.getpgrp()))\n"
+                          + ("time.sleep(30)\n" if mode == "timeout" else "sys.exit(1)\n"))
+                def fixture_certbot(args, env, lock):
+                    return real_run_certbot([sys.executable, "-c", parent], env, lock, timeout=1)
+                def cleanup_after_exit(cloud, target, generation, check):
+                    check()
+                    self.assertTrue((base / "api/lock").exists())
+                    self.assertTrue(started.exists())
+                    with self.assertRaises(ProcessLookupError):
+                        os.killpg(int(ready.read_text()), 0)
+                with patch("engine.run_certbot", side_effect=fixture_certbot), \
+                        patch("engine.cleanup", side_effect=cleanup_after_exit) as cleanup, \
+                        patch("engine.time.sleep", REAL_SLEEP):
+                    expected = "ACME_TIMEOUT" if mode == "timeout" else "ACME_FAILED"
+                    with self.assertRaisesRegex(Failure, expected):
+                        engine.run(self.cfg, {"action": "issue", "target": "api"}, base, self.cloud,
+                                   {}, "123456789", issuer=engine.issue)
+                cleanup.assert_called_once()
+                self.assertFalse((base / "api/lock").exists())
+                REAL_SLEEP(3.2)
+                self.assertFalse(marker.exists())
+
+    def test_unconfirmed_process_group_quarantines_lock_and_skips_cleanup(self):
+        for stop_result in (False, OSError("cannot inspect group")):
+            base = self.root / ("stop-error" if isinstance(stop_result, Exception) else "still-alive")
+            with self.subTest(result=type(stop_result).__name__), patch("engine.subprocess.Popen") as popen, \
+                    patch("engine.stop_certbot_group") as stop, patch("engine.cleanup") as cleanup:
+                popen.return_value.wait.side_effect = engine.subprocess.TimeoutExpired("fixture", 600)
+                if isinstance(stop_result, Exception):
+                    stop.side_effect = stop_result
+                else:
+                    stop.return_value = stop_result
+                with self.assertRaisesRegex(Failure, "ACME_PROCESS_GROUP_UNCONFIRMED"):
+                    engine.run(self.cfg, {"action": "issue", "target": "api"}, base, self.cloud,
+                               {}, "123456789", issuer=engine.issue)
+                cleanup.assert_not_called()
+                token = next((base / "api/lock").iterdir())
+                self.assertTrue(read(token)["quarantined"])
+                self.assertEqual(read(token)["expires"], 0)
+                with self.assertRaisesRegex(Failure, "LOCK_QUARANTINED"):
+                    with Lock(base / "api"):
+                        pass
 
     def test_legacy_cas_never_deletes_old_on_upload_success_or_failure(self):
         source = Path(__file__).parents[1] / "src/cert-generator/cas/index.py"

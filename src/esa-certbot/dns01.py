@@ -24,7 +24,7 @@ def recover(cloud, item, target):
     matches = [r for r in cloud.records(item["name"]) if matching(r, item, target)]
     if len(matches) > 1:
         raise Failure("DNS_OWNERSHIP_AMBIGUOUS")
-    return matches[0]["id"] if matches else None
+    return matches[0] if matches else None
 
 
 def create(cloud, target, run, value, check):
@@ -38,9 +38,10 @@ def create(cloud, target, run, value, check):
     if item.get("deleted"):
         raise Failure("DNS_CHALLENGE_ALREADY_CLEANED")
     if item["attempted"]:
-        record_id = recover(cloud, item, target)
-        if record_id is None:
+        record = recover(cloud, item, target)
+        if record is None:
             raise Failure("DNS_CREATE_UNKNOWN")
+        record_id = record["id"]
     else:
         check()
         item["attempted"] = True
@@ -52,8 +53,9 @@ def create(cloud, target, run, value, check):
             record_id = None
             for attempt in range(3):
                 check()
-                record_id = recover(cloud, item, target)
-                if record_id is not None:
+                record = recover(cloud, item, target)
+                if record is not None:
+                    record_id = record["id"]
                     break
                 if attempt < 2:
                     time.sleep(2)
@@ -76,21 +78,29 @@ def cleanup(cloud, target, run, check):
         records = cloud.records(item["name"])
         record_id = item["id"]
         if record_id is None:
-            record_id = recover(cloud, item, target)
-            if record_id is None:
+            record = recover(cloud, item, target)
+            if record is None:
                 # A create timeout can still commit later; do not forget this intent.
                 raise Failure("DNS_CREATE_UNKNOWN")
+            record_id = record["id"]
+            records = [record]  # Use the fresh observation, not the earlier list.
             item["id"] = record_id
+            check()
             write(path, item)
         for attempt in range(3):
             current = next((r for r in records if r["id"] == record_id), None)
             if current is None:
+                if not item.get("delete_attempted"):
+                    raise Failure("DNS_CLEANUP_UNCONFIRMED")
                 item["deleted"] = True
                 check()
                 write(path, item)
                 break
             if not matching(current, item, target):
                 raise Failure("DNS_OWNERSHIP_CHANGED")
+            check()
+            item["delete_attempted"] = True
+            write(path, item)
             check()
             try:
                 cloud.delete_txt(record_id)
