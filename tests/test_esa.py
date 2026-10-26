@@ -264,13 +264,46 @@ class Tests(unittest.TestCase):
         probe = Mock(return_value=False)
         with self.assertRaisesRegex(Failure, "PROPAGATION_TIMEOUT"):
             dns01.wait(self.target, {"name": "n", "value": "v"}, 12, lambda: None,
-                       probe=probe, sleep=sleep, clock=lambda: clock[0])
+                       probe=probe, sleep=sleep, clock=lambda: clock[0], stable_seconds=0)
         self.assertEqual(clock[0], 12)
         self.assertEqual(probe.call_count, 3)
         probe = Mock(side_effect=[False, True])
         dns01.wait(self.target, {"name": "n", "value": "v"}, 12, lambda: None,
-                   probe=probe, sleep=sleep, clock=lambda: clock[0])
+                   probe=probe, sleep=sleep, clock=lambda: clock[0], stable_seconds=0)
         self.assertEqual(probe.call_count, 2)
+
+    def test_propagation_requires_continuous_stability_and_resets_on_loss(self):
+        clock = [0]
+        def sleep(seconds):
+            clock[0] += seconds
+        # The first hit is insufficient; a later negative answer resets the window.
+        probe = Mock(side_effect=[True, True, False, True, True, True, True])
+        check = Mock()
+        dns01.wait(self.target, {"name": "n", "value": "PRIVATE-TXT"}, 20, check,
+                   probe=probe, sleep=sleep, clock=lambda: clock[0], stable_seconds=15)
+        self.assertEqual(clock[0], 30)
+        self.assertEqual(probe.call_count, 7)
+        self.assertEqual(check.call_count, 8)
+
+    def test_propagation_instability_is_bounded_and_default_waits_negative_cache(self):
+        clock = [0]
+        def sleep(seconds):
+            clock[0] += seconds
+        with self.assertRaisesRegex(Failure, "PROPAGATION_TIMEOUT"):
+            dns01.wait(self.target, {"name": "n", "value": "v"}, 10, lambda: None,
+                       probe=lambda *args: clock[0] % 10 == 0, sleep=sleep,
+                       clock=lambda: clock[0], stable_seconds=15)
+        self.assertEqual(clock[0], 25)
+        clock[0] = 0
+        dns01.wait(self.target, {"name": "n", "value": "v"}, 180, lambda: None,
+                   probe=lambda *args: True, sleep=sleep, clock=lambda: clock[0])
+        self.assertEqual(clock[0], 300)
+
+    def test_dns_stability_configuration_is_bounded(self):
+        for value in (0, 29, 301, True, "300"):
+            self.cfg["dns_stable_seconds"] = value
+            with self.assertRaisesRegex(Failure, "CONFIG_DNS_STABILITY"):
+                self.load_cfg(self.cfg)
 
     def test_real_dns_packet_logic_requires_all_ns_aa_and_no_cname(self):
         def resolve(name, kind, **kwargs):
@@ -586,7 +619,8 @@ class Tests(unittest.TestCase):
             self.assertEqual(kwargs["stdout"], engine.subprocess.DEVNULL)
             self.assertEqual(kwargs["stderr"], engine.subprocess.DEVNULL)
             self.assertTrue(kwargs["start_new_session"])
-            popen.return_value.wait.assert_called_once_with(timeout=600)
+            popen.return_value.wait.assert_called_once_with(timeout=720)
+            self.assertEqual(kwargs["env"]["FC_CERTBOT_DNS_STABLE_SECONDS"], "300")
             args = popen.call_args.args[0]
             self.assertIn("--manual-cleanup-hook", args)
             self.assertIn("--manual-auth-hook", args)

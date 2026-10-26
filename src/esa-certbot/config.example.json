@@ -5,6 +5,7 @@
   "acme_directory": "https://acme-staging-v02.api.letsencrypt.org/directory",
   "renew_before_days": 30,
   "dns_timeout": 180,
+  "dns_stable_seconds": 300,
   "regions": ["cn-shanghai"],
   "targets": {
     "api": {

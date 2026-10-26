@@ -9,7 +9,7 @@
 - `provider: esa` 为显式选择；原 AliDNS 入口仍可用。新入口只支持每个目标一个普通 ASCII FQDN，不支持 URL、通配符、多 SAN、CNAME 挑战委派或自定义 Vanity NS。需要这些能力时先扩展测试，不能放宽事件校验绕过。
 - 事件只能包含 `action` 和 `target`，不能覆盖域名、SiteId、地域、ACME 地址或邮箱。目标配置与 ACME 环境的摘要固定在状态文件中，配置边界变化会报 `STATE_SCOPE_CHANGED`，需单独迁移。
 - 读取 ESA `GetSite`，核对 SiteId、站点根域、`NS` 接入、`active` 状态及已分配 NS 列表。`CreateRecord` 使用完整 `_acme-challenge.api.example.com`、`TXT`、`Proxied=false`、`Data.Value` 和独立随机备注，不查找并覆盖已有 TXT。
-- 传播检查读取 zone 的 NS，再向配置清单中**每个** NS 的可达地址直接查询 TXT，要求权威回答 AA、完整名称和本次 token 匹配。UDP 截断回退 TCP，拒绝 CNAME，默认 180 秒、最多 300 秒。每个 NS 至少一个地址成功；不是对全部 anycast 节点的证明，也不做 DNSSEC 验证。递归 NS 缓存可能滞后，变更委派后必须等待并用独立 DNS 网络检查。
+- 传播检查读取 zone 的 NS，再向配置清单中**每个** NS 的可达地址直接查询 TXT，要求权威回答 AA、完整名称和本次 token 匹配。UDP 截断回退 TCP，拒绝 CNAME。首次命中后还须持续命中 `dns_stable_seconds`（默认 300 秒）；中途缺失或查询异常会重新计时，总预算为 `dns_timeout + dns_stable_seconds`（默认 480 秒，最多 600 秒）。每个 NS 至少一个地址成功；不是对全部 anycast 节点的证明，也不做 DNSSEC 验证。部署前检查 SOA 的负缓存有效期 `min(SOA TTL, SOA.MINIMUM)`，稳定窗口应覆盖它；若超过目前 300 秒上限，先评估调整等待和函数超时，不能盲重试。依据 [Let's Encrypt DNS-01 说明](https://letsencrypt.org/docs/challenge-types/)，本地命中不能保证 CA 的网络节点同时可见；仍须独立网络和 staging 验收。
 - 每次挑战持久化随机备注、token、RecordId。创建超时先按 SiteId、完整名称、类型、值、随机备注精确读回；查不到即停止，不盲目再创建。cleanup 只删除这些字段均匹配的本次 RecordId；同名其他 TXT 保留，删除结果未知也读回。
 - 换证顺序：新签发 → 新名称上传 CAS → 按名称读回并校验证书/私钥 → 只更新 FC `certConfig` → 读回 FC 叶证书指纹 → 实际 TLS 校验证书链、主机名、叶证书指纹。TLS 连接使用用户审核过的 FC 源站连接主机，SNI 使用业务域名。
 - **不删除任何旧 CAS 证书**。新名称仍带 `devs-certbot-generated-` 前缀；新入口下一轮按显式目标和 NAS 状态继续管理，不依赖旧名称扫描。保留旧证书可能积累费用/配额，清理必须制定显式保留期、引用检查和独立权限策略。
@@ -81,11 +81,14 @@
    | `esa_region` | ESA API 控制面地域，只允许杭州/新加坡，和 FC 上海地域不是同一概念 |
    | `nameservers` | ESA 分配的完整 NS 清单，2–6 个、小写、无末尾点 |
    | `tls_connect_host` | 经审核、能直连 FC HTTPS 源站的主机；不能填写 ESA 代理入口来冒充 FC 验证 |
-   | `renew_before_days` / `dns_timeout` | 默认临期 30 天续签、传播等待 180 秒；范围分别为 7–60 天、10–300 秒 |
+   | `renew_before_days` / `dns_timeout` | 默认临期 30 天续签、传播搜索预算 180 秒；范围分别为 7–60 天、10–300 秒 |
+   | `dns_stable_seconds` | 首次权威命中后持续匹配窗口，默认 300 秒，范围 30–300 秒；额外计入总等待，至少覆盖经核实的 SOA 负缓存有效期 |
 
    `ESA_CERTBOT_CONFIG=/code/config.json` 指向打包配置；`ESA_CERTBOT_STATE_ROOT=/mnt/certbot/state` 必须落在实际 `nfs`/`nfs4` 挂载中。`/tmp`、本地磁盘、OSS 挂载不能承担共享锁，入口会拒绝。staging 与生产使用不同函数、不同 NAS 状态根；不能直接拿 staging 状态切生产。
 
    函数计算保留 `FC_` 前缀，不能用此前缀定义部署环境变量；请保持模板中的 `ESA_CERTBOT_` 名称。
+
+   Certbot 进程组总超时为 720 秒，包含最多 600 秒 DNS 检查和剩余 ACME/API 时间；FC 超时保持 900 秒。hook 仅输出不含 TXT 的 `dns_created` / `dns_stable` 时间事件，便于对照 CA 失败与 cleanup 时序。看到 ACME `NXDOMAIN` 时先查这些现有日志、SOA 和清理记录，避免直接重复签发。
 
 5. 构建 Linux x86_64 包，可在 macOS 交叉打包；原生扩展强制使用 Linux wheel，少量纯 Python SDK 源码包使用固定 setuptools/wheel 构建：
 

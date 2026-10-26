@@ -28,6 +28,8 @@ def load(path):
         raise Failure("CONFIG_RENEW_WINDOW")
     if not 10 <= cfg.get("dns_timeout", 180) <= 300:
         raise Failure("CONFIG_DNS_TIMEOUT")
+    if type(cfg.get("dns_stable_seconds", 300)) is not int or not 30 <= cfg.get("dns_stable_seconds", 300) <= 300:
+        raise Failure("CONFIG_DNS_STABILITY")
     if not cfg.get("regions") or any(not re.fullmatch(r"(?:cn|ap|eu|us|me)-[a-z]+(?:-[a-z]+)?-?\d*", r) for r in cfg["regions"]):
         raise Failure("CONFIG_REGIONS")
     seen = set()

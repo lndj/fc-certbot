@@ -72,7 +72,7 @@ def stop_certbot_group(process, grace=2):
     return gone()
 
 
-def run_certbot(args, env, lock, timeout=600):
+def run_certbot(args, env, lock, timeout=720):
     lock.check()
     process = subprocess.Popen(args, env=env, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, start_new_session=True)
@@ -108,7 +108,8 @@ def issue(cfg, target, run, credentials, account, lock):
         env.update(FC_CERTBOT_TARGET=json.dumps(target), FC_CERTBOT_STS=json.dumps(credentials),
                    FC_CERTBOT_ACCOUNT=str(account), FC_CERTBOT_RUN=str(run),
                    FC_CERTBOT_LOCK_TOKEN=str(lock.token),
-                   FC_CERTBOT_DNS_TIMEOUT=str(cfg.get("dns_timeout", 180)))
+                   FC_CERTBOT_DNS_TIMEOUT=str(cfg.get("dns_timeout", 180)),
+                   FC_CERTBOT_DNS_STABLE_SECONDS=str(cfg.get("dns_stable_seconds", 300)))
         hook = shlex.quote(sys.executable) + " " + shlex.quote(str(Path(__file__).with_name("hook.py")))
         args = [sys.executable, "-c", "from certbot.main import main; import sys; sys.exit(main())",
                 "certonly", "--config", "/dev/null", "--config-dir", str(config),
