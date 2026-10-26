@@ -49,7 +49,10 @@ def main():
         for name, path in sorted(files):
             info = zipfile.ZipInfo(name, date_time=(2024, 1, 1, 0, 0, 0))
             info.create_system = 3
-            info.external_attr = 0o100600 << 16
+            # FC extracts code as a different user from the runtime UID. Code
+            # and placeholder/non-secret config must be runtime-readable. The
+            # local archive stays 0600; keys and STS credentials never enter it.
+            info.external_attr = 0o100644 << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(info, path.read_bytes(), compresslevel=9)
     print("build/esa/fc-certbot-esa.zip sha256=" + hashlib.sha256(bundle.read_bytes()).hexdigest())
