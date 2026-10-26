@@ -1,0 +1,55 @@
+# Copy to s-esa.local.yaml and review all placeholders. No automatic RAM creation.
+edition: 3.0.0
+name: fc-certbot-esa
+access: default
+vars:
+  region: cn-shanghai
+  role: acs:ram::1234567890123456:role/example-fc-certbot
+  functionName: fc-certbot-esa-example
+resources:
+  esa-certbot:
+    component: fc3@0.1.27
+    props:
+      region: ${vars.region}
+      functionName: ${vars.functionName}
+      description: ESA DNS01 certificate renewal for explicit targets
+      role: ${vars.role}
+      runtime: python3.10
+      handler: index.handler
+      code: ./build/esa/fc-certbot-esa.zip
+      timeout: 900
+      cpu: 1
+      memorySize: 2048
+      diskSize: 512
+      internetAccess: true
+      instanceConcurrency: 1
+      asyncInvokeConfig:
+        maxAsyncEventAgeInSeconds: 3600
+        maxAsyncRetryAttempts: 0
+      environmentVariables:
+        PYTHONPATH: /code/python:/code
+        FC_CERTBOT_CONFIG: /code/config.json
+        FC_CERTBOT_STATE_ROOT: /mnt/certbot/state
+      vpcConfig:
+        vpcId: vpc-example
+        vSwitchIds: [vsw-example]
+        securityGroupId: sg-example
+      nasConfig:
+        userId: 10003
+        groupId: 10003
+        mountPoints:
+          - serverAddr: example.cn-shanghai.nas.aliyuncs.com:/certbot
+            mountDir: /mnt/certbot
+            enableTLS: true
+      # Configure reviewed SLS destinations before accepting production operation.
+      logConfig:
+        project: example-project
+        logstore: example-logstore
+      triggers:
+        - triggerName: renew-api
+          triggerType: timer
+          qualifier: LATEST
+          triggerConfig:
+            enable: false
+            cronExpression: CRON_TZ=Asia/Shanghai 0 0 3 * * *
+            payload: '{"action":"renew","target":"api"}'

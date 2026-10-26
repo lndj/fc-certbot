@@ -30,7 +30,6 @@ def check_if_valid_domain():
 
 
 def insert_rr(domainName, rr):
-    print(os.environ["CERTBOT_VALIDATION"])
     client.add_domain_record_with_options(
         alidns_20150109_models.AddDomainRecordRequest(
             domain_name=domainName,
