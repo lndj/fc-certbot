@@ -158,15 +158,28 @@ def authoritative(target, name, value, deadline):
     return True
 
 
-def wait(target, item, timeout, check, probe=authoritative, sleep=time.sleep, clock=time.monotonic):
-    deadline = clock() + timeout
+def wait(target, item, timeout, check, probe=authoritative, sleep=time.sleep, clock=time.monotonic,
+         stable_seconds=300):
+    # One local anycast hit does not establish CA visibility. Keep checking all
+    # authorities for a configured continuous window, including negative-cache
+    # expiry. The search budget and stability window together remain bounded.
+    deadline = clock() + timeout + stable_seconds
+    visible_since = None
     while clock() < deadline:
         check()
         try:
-            if probe(target, item["name"], item["value"], deadline):
-                return
+            visible = probe(target, item["name"], item["value"], deadline)
         except dns.exception.DNSException:
-            pass
+            visible = False
+        now = clock()
+        if visible:
+            if visible_since is None:
+                visible_since = now
+            if now - visible_since >= stable_seconds:
+                check()
+                return
+        else:
+            visible_since = None
         delay = min(5, deadline - clock())
         if delay > 0:
             sleep(delay)

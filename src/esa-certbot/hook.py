@@ -26,7 +26,10 @@ def main():
         if not 1 <= len(value) <= 512:
             raise Failure("HOOK_VALIDATION")
         item = create(cloud, target, run, value, check)
-        wait(target, item, int(os.environ["FC_CERTBOT_DNS_TIMEOUT"]), check)
+        print(json.dumps({"event": "dns_created", "at": int(time.time())}), flush=True)
+        wait(target, item, int(os.environ["FC_CERTBOT_DNS_TIMEOUT"]), check,
+             stable_seconds=int(os.environ["FC_CERTBOT_DNS_STABLE_SECONDS"]))
+        print(json.dumps({"event": "dns_stable", "at": int(time.time())}), flush=True)
     elif sys.argv[1] == "cleanup":
         # Clean each challenge's exact ID, including earlier hooks in this run.
         cleanup(cloud, target, run, check)
