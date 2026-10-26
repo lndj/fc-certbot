@@ -57,6 +57,24 @@ def load(path):
     return cfg
 
 
+def parse_event(event):
+    """Unwrap the documented FC timer shape once; metadata grants no scope."""
+    try:
+        if isinstance(event, (str, bytes, bytearray)):
+            event = json.loads(event)
+        if isinstance(event, dict) and "payload" in event:
+            if (set(event) != {"triggerTime", "triggerName", "payload"}
+                    or not all(isinstance(event[k], str) and event[k]
+                               for k in ("triggerTime", "triggerName", "payload"))):
+                raise Failure("EVENT_SCOPE")
+            event = json.loads(event["payload"])
+            if not isinstance(event, dict) or event.get("action") != "renew":
+                raise Failure("EVENT_SCOPE")
+        return event
+    except (ValueError, TypeError, UnicodeError):
+        raise Failure("EVENT_SCOPE") from None
+
+
 def select(cfg, event):
     if not isinstance(event, dict) or set(event) != {"action", "target"}:
         raise Failure("EVENT_SCOPE")

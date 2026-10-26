@@ -5,7 +5,7 @@
 ## 实际执行
 
 - macOS arm64，隔离 CPython 3.10.17，Certbot 5.8.0；ESA SDK 3.16.0、FC SDK 4.8.3、CAS SDK 3.9.4、dnspython 2.7.0。完整依赖固定版本及包哈希随源码提交。
-- `python -m unittest discover -s tests -v`：**46 项通过**。测试使用真实 SDK 请求模型与本地生成的模拟证书，云客户端/网络均被替换；不会向 ACME/云 API 申请或安装证书。
+- `python -m unittest discover -s tests -v`：**49 项通过**。测试使用真实 SDK 请求模型与本地生成的模拟证书，云客户端/网络均被替换；不会向 ACME/云 API 申请或安装证书。
 - `node tests/test_legacy.cjs`：通过。验证原 manager 采用新 CAS 名称、容忍缺失 certConfig，且只发送 certConfig。
 - Python `compileall`、Node `--check`、`git diff --check`：通过。
 - `certbot --version` / `--help all`：实际执行，核对本实现使用的 manual hook、目录、RSA 和邮箱选项；未执行 certonly。
@@ -24,6 +24,8 @@
 传播稳定性回归：假时钟验证默认首次命中后仍等待 300 秒，中途缺失重置连续窗口，反复出现/消失只消耗有界总预算；稳定时间配置拒绝越界与非整数值。Certbot 进程组总预算相应调整为 720 秒，并断言 hook 收到配置。上述测试均不发起 DNS 写入或 ACME 请求；连续本地权威命中仍不能证明所有全球 anycast 节点和 CA 递归缓存同步。
 
 RSA 格式回归：使用本地生成的真实 RSA 密钥，将其编码为 Certbot 使用的 PKCS#8，确认 CAS/FC 收到对应的 PKCS#1 且密钥完全一致；模拟已存在的 PKCS#8 CAS 上传，确认新名称/ClientToken、旧上传保留、只上传一次、复用证书且不重签。
+
+定时入口回归：按 FC 官方 `triggerTime/triggerName/payload` 外层，实际经过 `index.handler`、配置白名单与引擎的未到期续期路径（云/DNS/TLS 使用模拟对象），三种输入编码均复用原候选、不签发/上传/改 FC；18 种空、恶意或扩大范围的外层/payload 在访问凭据、NAS、云客户端之前拒绝。手动顶层事件保持兼容。本项是官方事件结构的离线入口验证，不代表真实定时调度已经启用或触发。
 
 ## 主要故障覆盖
 

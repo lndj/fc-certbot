@@ -1,7 +1,7 @@
 import json
 import os
 from cloud import Cloud
-from config import load, select
+from config import load, parse_event, select
 from engine import run
 from state import Failure, require_nas
 
@@ -11,7 +11,7 @@ def handler(event, context):
     try:
         os.umask(0o077)
         cfg = load(os.environ["ESA_CERTBOT_CONFIG"])
-        evt = json.loads(event) if isinstance(event, (str, bytes, bytearray)) else event
+        evt = parse_event(event)
         target = select(cfg, evt)
         target_id = evt["target"]
         # The FC role credentials are refreshed for every invocation. Never read
