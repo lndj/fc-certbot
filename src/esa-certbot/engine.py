@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from config import select
 from dns01 import cleanup
 from state import Failure, Lock, read, write
@@ -30,6 +31,16 @@ def fingerprint(pem):
 
 def days_left(pem):
     return (leaf(pem).not_valid_after_utc - datetime.now(timezone.utc)).total_seconds() / 86400
+
+
+def rsa_private_key(pem):
+    private = serialization.load_pem_private_key(pem.encode(), password=None)
+    if not isinstance(private, rsa.RSAPrivateKey):
+        raise Failure("CERT_KEY_ALGORITHM")
+    # Certbot writes PKCS#8; FC requires the RSA PKCS#1 PEM envelope.
+    return private.private_bytes(serialization.Encoding.PEM,
+                                 serialization.PrivateFormat.TraditionalOpenSSL,
+                                 serialization.NoEncryption()).decode()
 
 
 def validate_material(cert, key, domain):
@@ -159,7 +170,8 @@ def ensure_upload(cloud, state, save, cert, key, check, sleep=time.sleep):
         save()
         check()
         try:
-            cloud.upload(name, cert, key, fingerprint(cert))
+            token = hashlib.sha256((name + fingerprint(cert)).encode()).hexdigest()
+            cloud.upload(name, cert, key, token)
         except Exception:
             pass
         # Always read back, even when UploadUserCertificate reports success.
@@ -175,6 +187,17 @@ def ensure_upload(cloud, state, save, cert, key, check, sleep=time.sleep):
     if fingerprint(found["cert"]) != fingerprint(cert):
         raise Failure("CAS_NAME_CONFLICT")
     validate_material(found["cert"], found["key"], state["domain"])
+    if not found["key"].lstrip().startswith("-----BEGIN RSA PRIVATE KEY-----"):
+        if name.endswith("-rsa"):
+            raise Failure("CAS_KEY_FORMAT")
+        # An older uploaded PKCS#8 certificate cannot be selected by FC's
+        # console. Preserve it and upload the same material once under a new
+        # journaled name. No new ACME order or deletion is involved.
+        candidate["name"] = name + "-rsa"
+        candidate.pop("cas_attempted", None)
+        candidate.pop("cas_id", None)
+        save()
+        return ensure_upload(cloud, state, save, cert, key, check, sleep)
     candidate["cas_id"] = found["id"]
     save()
     return found["id"]
@@ -241,6 +264,8 @@ def run(cfg, event, root, cloud, credentials, account, issuer=issue, verifier=ve
             if fingerprint(cert) != candidate["fingerprint"]:
                 raise Failure("STATE_CERT_CHANGED")
         if cert is None or (candidate.get("installed") and days_left(cert) < cfg.get("renew_before_days", 30)):
+            if cfg.get("allow_issuance", True) is not True:
+                raise Failure("ACME_ISSUANCE_DISABLED")
             if not candidate or candidate.get("fingerprint"):
                 candidate = {"run": "generation-" + uuid.uuid4().hex}
                 state["candidate"] = candidate
@@ -261,6 +286,7 @@ def run(cfg, event, root, cloud, credentials, account, issuer=issue, verifier=ve
         if days_left(cert) < cfg.get("renew_before_days", 30) and not candidate.get("installed"):
             # An abandoned uninstalled candidate is never installed close to expiry.
             raise Failure("CANDIDATE_EXPIRES_SOON")
+        key = rsa_private_key(key)
         cas_id = ensure_upload(cloud, state, save, cert, key, lock.check)
         if event["action"] == "renew":
             install(cloud, state, save, cert, key, target, lock.check, verify=verifier)

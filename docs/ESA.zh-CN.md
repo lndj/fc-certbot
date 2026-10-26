@@ -14,6 +14,7 @@
 - 换证顺序：新签发 → 新名称上传 CAS → 按名称读回并校验证书/私钥 → 只更新 FC `certConfig` → 读回 FC 叶证书指纹 → 实际 TLS 校验证书链、主机名、叶证书指纹。TLS 连接使用用户审核过的 FC 源站连接主机，SNI 使用业务域名。
 - **不删除任何旧 CAS 证书**。新名称仍带 `devs-certbot-generated-` 前缀；新入口下一轮按显式目标和 NAS 状态继续管理，不依赖旧名称扫描。保留旧证书可能积累费用/配额，清理必须制定显式保留期、引用检查和独立权限策略。
 - Certbot 与 shell/hook 使用独立 Unix 进程组。超时、异常及父进程退出后，先 TERM、再按需 KILL，确认整个进程组消失后才进行 cleanup 或释放锁；无法确认则撤销 owner token 的有效期并隔离保留锁，阻止下一执行。
+- Certbot 的 RSA PKCS#8 私钥在发送 CAS/FC 前用已固定的 cryptography 转为 RSA PKCS#1 PEM，密钥和证书不变。若 NAS journal 对应的旧 CAS 上传仍是 PKCS#8，则保留旧上传，以原名称加 `-rsa` 的独立 CAS 名称/ClientToken 上传兼容格式并读回；复用现有证书，不再发 ACME 请求。原始 Certbot 私钥继续受限保存，不在日志输出。
 - SDK 禁用自动重试。DNS/CAS 未知结果只读回，仍未知则失败并保留意图；FC 更新未知先读回，下一次调用再次读回后才决定是否重发。成功候选会复用，避免 FC/TLS 失败导致重新签发。
 
 ## 先决条件与权限审查
@@ -76,6 +77,7 @@
    | `provider` | 固定 `esa`，不能回退 AliDNS |
    | `email` / `agree_tos` | 实际证书联系人邮箱与已确认的协议授权 |
    | `acme_directory` | 仅允许 Let's Encrypt 官方 staging 或 production 地址；staging 禁止 `renew` 安装 |
+   | `allow_issuance` | 默认 `true`；恢复操作可显式设为 `false`，只允许复用已签候选，候选缺失或需要续签时在调用 Certbot 前失败。正式自动续签启用前需恢复 `true` |
    | `regions` / `targets.<id>.region` | 显式 FC 地域清单和目标地域，默认 `cn-shanghai` |
    | `domain` / `zone` / `site_id` | 精确业务域名、ESA NS zone、数值 SiteId；GetSite 必须一致 |
    | `esa_region` | ESA API 控制面地域，只允许杭州/新加坡，和 FC 上海地域不是同一概念 |

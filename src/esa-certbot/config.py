@@ -24,6 +24,8 @@ def load(path):
         raise Failure("EMAIL_TOS_CONFIRMATION_REQUIRED")
     if cfg.get("acme_directory") not in (PRODUCTION, STAGING):
         raise Failure("CONFIG_ACME")
+    if type(cfg.get("allow_issuance", True)) is not bool:
+        raise Failure("CONFIG_ISSUANCE")
     if not 7 <= cfg.get("renew_before_days", 30) <= 60:
         raise Failure("CONFIG_RENEW_WINDOW")
     if not 10 <= cfg.get("dns_timeout", 180) <= 300:
