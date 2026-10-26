@@ -137,6 +137,14 @@ npx --yes @serverless-devs/s@3.1.10 -t s-esa.local.yaml deploy
 
 云验收通过后才由操作者将生产模板中的 timer 改为 `enable: true` 并重新部署。示例每天北京时间 03:00 对 `api` 目标执行 `renew`；新增目标要增加显式配置与独立 timer payload，不能改成账号扫描。每次先处理遗留挑战，再复用候选；临期 30 天签发新证书，其余时候检查当前安装和 TLS。生产环境不要用手工改状态或设置异常阈值来强制签发测试。
 
+FC 定时触发器传给 Python 入口的事件带有外层 `triggerTime`、`triggerName`、字符串 `payload`，不是直接传入 payload。入口只按[官方定时事件格式](https://help.aliyun.com/zh/functioncompute/time-triggers)解包一次；timer 内层只允许 `renew`，并继续经过原有精确 `action/target` 白名单校验。额外字段、空/非法 JSON、嵌套外层和 timer 的 `issue` 均拒绝；元数据不授予额外权限。手动 SDK 调用仍支持原来的顶层事件。
+
+启用前可使用下面的完整事件做一次未到期 `renew` 验证；不要改成 `issue` 或强制重签。模板的 `triggerConfig.payload` 仍只填写内层 JSON 字符串，外层由 FC 自动添加：
+
+```json
+{"triggerTime":"2026-01-01T19:00:00Z","triggerName":"renew-api","payload":"{\"action\":\"renew\",\"target\":\"api\"}"}
+```
+
 失败输出单行结构化事件，例如：
 
 ```json

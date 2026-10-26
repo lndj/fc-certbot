@@ -547,6 +547,64 @@ class Tests(unittest.TestCase):
             self.assertIn(name + ":", template)
         self.assertNotIn("FC_CERTBOT_", template)
 
+    def test_official_timer_envelope_runs_existing_renew_without_issuance(self):
+        self.bind()
+        context = NS(credentials=NS(access_key_id="test", access_key_secret="test",
+                                   security_token="test"), account_id="123456789")
+        payload = {"action": "renew", "target": "api"}
+        envelope = {"triggerTime": "2026-01-01T19:00:00Z", "triggerName": "renew-api",
+                    "payload": json.dumps(payload)}
+        def run(cfg, event, root, cloud, credentials, account):
+            return engine.run(cfg, event, root, cloud, credentials, account,
+                              issuer=self.issuer, verifier=self.verify)
+        with patch.dict(os.environ, {"ESA_CERTBOT_CONFIG": "deployment.json",
+                                     "ESA_CERTBOT_STATE_ROOT": str(self.root)}, clear=True), \
+                patch.object(index, "load", return_value=self.cfg), \
+                patch.object(index, "require_nas", return_value=self.root), \
+                patch.object(index, "Cloud", return_value=self.cloud), \
+                patch.object(index, "run", side_effect=run) as runner, \
+                contextlib.redirect_stdout(io.StringIO()):
+            for event in (envelope, json.dumps(envelope), json.dumps(envelope).encode()):
+                self.assertEqual(index.handler(event, context)["status"], "verified")
+                self.assertEqual(runner.call_args.args[1], payload)
+        self.assertEqual((self.issues, self.cloud.uploads, self.cloud.installs), (1, 1, 0))
+
+    def test_timer_payload_rejects_malformed_or_expanded_scope_before_cloud(self):
+        base = {"triggerTime": "2026-01-01T19:00:00Z", "triggerName": "renew-api"}
+        payloads = ["", "{PRIVATE", "null", "[]", "true", '"PRIVATE"', "{}",
+                    {"action": "renew", "target": "api"},
+                    json.dumps({"action": "issue", "target": "api"}),
+                    json.dumps({"action": "renew", "target": "unknown"}),
+                    json.dumps({"action": "renew", "target": "api", "force": True}),
+                    json.dumps({"action": "renew", "target": "api", "site_id": 999}),
+                    json.dumps({"action": "renew", "target": "api", "domain": "evil.example.com"}),
+                    json.dumps({**base, "payload": '{"action":"renew","target":"api"}'})]
+        events = [{**base, "payload": p} for p in payloads]
+        good = {**base, "payload": '{"action":"renew","target":"api"}'}
+        events += [{**good, "force": True}, {**good, "triggerName": ""},
+                   {**good, "triggerTime": None}, {"payload": good["payload"]}]
+        output = io.StringIO()
+        with patch.object(index, "load", return_value=self.cfg), \
+                patch.object(index, "Cloud") as cloud, patch.object(index, "run") as run, \
+                patch.object(index, "require_nas") as nas, \
+                patch.dict(os.environ, {"ESA_CERTBOT_CONFIG": "deployment.json"}, clear=True), \
+                contextlib.redirect_stdout(output):
+            for event in events:
+                with self.subTest(event=event), self.assertRaisesRegex(RuntimeError, "^EVENT_SCOPE$"):
+                    index.handler(json.dumps(event), NS())
+        cloud.assert_not_called()
+        run.assert_not_called()
+        nas.assert_not_called()
+        self.assertNotIn("PRIVATE", output.getvalue())
+
+    def test_direct_manual_events_remain_compatible(self):
+        for action in ("issue", "renew"):
+            event = {"action": action, "target": "api"}
+            for raw in (event, json.dumps(event), json.dumps(event).encode()):
+                parsed = config.parse_event(raw)
+                self.assertEqual(parsed, event)
+                self.assertEqual(config.select(self.cfg, parsed), self.target)
+
     def test_handler_sanitizes_sdk_errors_and_private_values(self):
         context = NS(credentials=NS(access_key_id="SECRET-AK", access_key_secret="SECRET-KEY", security_token="SECRET-STS"), account_id="123456789")
         captured = io.StringIO()
