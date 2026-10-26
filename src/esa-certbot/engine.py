@@ -264,6 +264,8 @@ def run(cfg, event, root, cloud, credentials, account, issuer=issue, verifier=ve
             if fingerprint(cert) != candidate["fingerprint"]:
                 raise Failure("STATE_CERT_CHANGED")
         if cert is None or (candidate.get("installed") and days_left(cert) < cfg.get("renew_before_days", 30)):
+            if cfg.get("allow_issuance", True) is not True:
+                raise Failure("ACME_ISSUANCE_DISABLED")
             if not candidate or candidate.get("fingerprint"):
                 candidate = {"run": "generation-" + uuid.uuid4().hex}
                 state["candidate"] = candidate

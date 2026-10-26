@@ -371,6 +371,7 @@ class Tests(unittest.TestCase):
 
     def test_legacy_pkcs8_upload_migrates_once_without_acme_or_deletion(self):
         first = self.run_event()
+        self.cfg["allow_issuance"] = False
         old = self.cloud.certs[first["cert_name"]]
         old["key"] = serialization.load_pem_private_key(self.key.encode(), password=None).private_bytes(
             serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
@@ -382,6 +383,16 @@ class Tests(unittest.TestCase):
         self.assertNotEqual(*self.cloud.upload_tokens)
         self.assertEqual(self.run_event(), second)
         self.assertEqual((self.issues, self.cloud.uploads, len(self.cloud.certs)), (1, 2, 2))
+
+    def test_issuance_disabled_cannot_create_new_acme_order(self):
+        self.cfg["allow_issuance"] = False
+        self.load_cfg(self.cfg)
+        with self.assertRaisesRegex(Failure, "ACME_ISSUANCE_DISABLED"):
+            self.run_event()
+        self.assertEqual((self.issues, self.cloud.uploads, self.cloud.creates), (0, 0, 0))
+        self.cfg["allow_issuance"] = "false"
+        with self.assertRaisesRegex(Failure, "CONFIG_ISSUANCE"):
+            self.load_cfg(self.cfg)
 
     def test_upload_timeout_committed_recovers_by_name_and_material(self):
         self.cloud.upload_mode = "committed"

@@ -5,7 +5,7 @@
 ## 实际执行
 
 - macOS arm64，隔离 CPython 3.10.17，Certbot 5.8.0；ESA SDK 3.16.0、FC SDK 4.8.3、CAS SDK 3.9.4、dnspython 2.7.0。完整依赖固定版本及包哈希随源码提交。
-- `python -m unittest discover -s tests -v`：**45 项通过**。测试使用真实 SDK 请求模型与本地生成的模拟证书，云客户端/网络均被替换；不会向 ACME/云 API 申请或安装证书。
+- `python -m unittest discover -s tests -v`：**46 项通过**。测试使用真实 SDK 请求模型与本地生成的模拟证书，云客户端/网络均被替换；不会向 ACME/云 API 申请或安装证书。
 - `node tests/test_legacy.cjs`：通过。验证原 manager 采用新 CAS 名称、容忍缺失 certConfig，且只发送 certConfig。
 - Python `compileall`、Node `--check`、`git diff --check`：通过。
 - `certbot --version` / `--help all`：实际执行，核对本实现使用的 manual hook、目录、RSA 和邮箱选项；未执行 certonly。

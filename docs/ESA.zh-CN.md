@@ -77,6 +77,7 @@
    | `provider` | 固定 `esa`，不能回退 AliDNS |
    | `email` / `agree_tos` | 实际证书联系人邮箱与已确认的协议授权 |
    | `acme_directory` | 仅允许 Let's Encrypt 官方 staging 或 production 地址；staging 禁止 `renew` 安装 |
+   | `allow_issuance` | 默认 `true`；恢复操作可显式设为 `false`，只允许复用已签候选，候选缺失或需要续签时在调用 Certbot 前失败。正式自动续签启用前需恢复 `true` |
    | `regions` / `targets.<id>.region` | 显式 FC 地域清单和目标地域，默认 `cn-shanghai` |
    | `domain` / `zone` / `site_id` | 精确业务域名、ESA NS zone、数值 SiteId；GetSite 必须一致 |
    | `esa_region` | ESA API 控制面地域，只允许杭州/新加坡，和 FC 上海地域不是同一概念 |
