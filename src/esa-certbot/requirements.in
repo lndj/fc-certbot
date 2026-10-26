@@ -1,0 +1,7 @@
+certbot==5.8.0
+acme==5.8.0
+alibabacloud-esa20240910==3.16.0
+alibabacloud-fc20230330==4.8.3
+alibabacloud-cas20200407==3.9.4
+dnspython==2.7.0
+cryptography==50.0.2

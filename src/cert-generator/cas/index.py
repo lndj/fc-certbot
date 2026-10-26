@@ -11,27 +11,14 @@ from alibabacloud_tea_util import models as util_models
 
 
 def get_cert_name(domainName, certName):
-    if certName is None:
-        if domainName.startswith("*."):
-            tokens = domainName.split(".")
-            return (
-                "devs-certbot-generated-w-"
-                + str(len(tokens))
-                + "-"
-                + "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
-            )
-        else:
-            return "devs-certbot-generated-" + "".join(
-                random.choices(string.ascii_lowercase + string.digits, k=8)
-            )
-    else:
-        return certName
+    # Always use a fresh replacement name; never delete the previous certificate.
+    suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    if domainName.startswith("*."):
+        return "devs-certbot-generated-w-" + str(len(domainName.split("."))) + "-" + suffix
+    return "devs-certbot-generated-" + suffix
 
 
 def upload_cert(certPath, keyPath, domainName, certName, certId):
-    if certId is not None:
-        delete_cert(certId)
-        print("delete old certificate first.")
     cert = Path(certPath).read_text()
     key = Path(keyPath).read_text()
     upload_user_certificate_request = cas_20200407_models.UploadUserCertificateRequest(

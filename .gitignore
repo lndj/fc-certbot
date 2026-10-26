@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+src/esa-certbot/python/
+build/
+*.local.json
+*.local.yaml
+.env

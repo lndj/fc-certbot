@@ -59,7 +59,7 @@ async function listCustomDomains(regionId, context) {
         const { protocol, certConfig } = customDomain;
         if (
           protocol.toLocaleLowerCase().includes("https") &&
-          certConfig.certName.startsWith(CERT_PREFIX)
+          certConfig && certConfig.certName && certConfig.certName.startsWith(CERT_PREFIX)
         ) {
           customDomain.regionId = regionId;
           return true;
@@ -138,6 +138,10 @@ async function updateCustomDomains(certName, customDomains, context) {
         }),
         runtime
       );
+      const nextCertName = certInfo.body.name;
+      if (!nextCertName || !nextCertName.startsWith(CERT_PREFIX)) {
+        throw new Error("Unexpected generated certificate name");
+      }
       await Promise.all([
         ...customDomains
           .filter((customDomain) => {
@@ -151,7 +155,7 @@ async function updateCustomDomains(certName, customDomains, context) {
             }
           })
           .map((customDomain) =>
-            updateCustomDomain(customDomain, certName, certInfo, context)
+            updateCustomDomain(customDomain, nextCertName, certInfo, context)
           ),
       ]);
     } else {
