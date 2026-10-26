@@ -89,6 +89,8 @@
 
 5. 构建 Linux x86_64 包，可在 macOS 交叉打包；原生扩展强制使用 Linux wheel，少量纯 Python SDK 源码包使用固定 setuptools/wheel 构建：
 
+   ZIP 内的代码、依赖和非密钥部署配置使用 `0644`，以便 FC 解压后运行用户可读取；本地 ZIP 仍为 `0600`。证书私钥和临时凭据不得进入代码包，NAS 中的状态与私钥权限仍为 `0600`。
+
    ```sh
    .venv/bin/python tools/build_esa.py --config config.local.json
    .venv/bin/python tools/build_esa.py --config config.local.json --reuse-deps

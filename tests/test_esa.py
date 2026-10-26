@@ -1,6 +1,7 @@
 """Offline contract + fault tests. No DNS, ACME or cloud writes are performed."""
 import contextlib
 import copy
+import hashlib
 import io
 import importlib.util
 import json
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace as NS
 from unittest.mock import MagicMock, Mock, patch
@@ -416,6 +418,35 @@ class Tests(unittest.TestCase):
             self.assertTrue(new.token.exists())
             with self.assertRaisesRegex(Failure, "LOCK_LOST"):
                 old.check()
+
+    def test_deployment_archive_is_readable_by_fc_non_owner_uid(self):
+        spec = importlib.util.spec_from_file_location(
+            "esa_builder", Path(__file__).parents[1] / "tools/build_esa.py")
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source, build = base / "source", base / "build"
+            source.mkdir()
+            (source / "index.py").write_text("def handler(event, context): return 'ok'\n")
+            (source / "requirements.lock").write_text("locked dependencies")
+            configuration = source / "config.example.json"
+            configuration.write_text('{"domain":"api.example.com"}')
+            (build / "python").mkdir(parents=True)
+            (build / "python/dependency.py").write_text("answer = 42\n")
+            (build / "dependencies.sha256").write_text(hashlib.sha256(
+                (source / "requirements.lock").read_bytes()).hexdigest())
+            with patch.object(builder, "SOURCE", source), patch.object(builder, "BUILD", build), \
+                    patch.object(builder.subprocess, "check_output", return_value="uv 0.6.16"), \
+                    patch.object(sys, "argv", ["build_esa.py", "--reuse-deps", "--config", str(configuration)]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                builder.main()
+            with zipfile.ZipFile(build / "fc-certbot-esa.zip") as archive:
+                self.assertEqual(set(archive.namelist()), {"index.py", "config.json", "python/dependency.py"})
+                for item in archive.infolist():
+                    mode = item.external_attr >> 16
+                    self.assertTrue(mode & 0o004, item.filename + " unreadable by FC runtime UID")
+                    self.assertFalse(mode & 0o022, item.filename + " writable by non-owner")
 
     def test_handler_uses_fc_allowed_environment_names(self):
         context = NS(credentials=NS(access_key_id="test", access_key_secret="test",
