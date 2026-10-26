@@ -10,7 +10,7 @@ def handler(event, context):
     target_id = "invalid"
     try:
         os.umask(0o077)
-        cfg = load(os.environ["FC_CERTBOT_CONFIG"])
+        cfg = load(os.environ["ESA_CERTBOT_CONFIG"])
         evt = json.loads(event) if isinstance(event, (str, bytes, bytearray)) else event
         target = select(cfg, evt)
         target_id = evt["target"]
@@ -19,7 +19,7 @@ def handler(event, context):
         credentials = {"access_key_id": context.credentials.access_key_id,
                        "access_key_secret": context.credentials.access_key_secret,
                        "security_token": context.credentials.security_token}
-        root = require_nas(os.environ["FC_CERTBOT_STATE_ROOT"])
+        root = require_nas(os.environ["ESA_CERTBOT_STATE_ROOT"])
         cloud = Cloud(credentials, context.account_id, target)
         result = run(cfg, evt, root, cloud, credentials, context.account_id)
         print(json.dumps({"event": "fc_certbot", "target": target_id, "phase": result["status"]}))
