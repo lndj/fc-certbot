@@ -28,8 +28,8 @@ resources:
         maxAsyncRetryAttempts: 0
       environmentVariables:
         PYTHONPATH: /code/python:/code
-        FC_CERTBOT_CONFIG: /code/config.json
-        FC_CERTBOT_STATE_ROOT: /mnt/certbot/state
+        ESA_CERTBOT_CONFIG: /code/config.json
+        ESA_CERTBOT_STATE_ROOT: /mnt/certbot/state
       vpcConfig:
         vpcId: vpc-example
         vSwitchIds: [vsw-example]

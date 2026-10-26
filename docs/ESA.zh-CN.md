@@ -83,7 +83,9 @@
    | `tls_connect_host` | 经审核、能直连 FC HTTPS 源站的主机；不能填写 ESA 代理入口来冒充 FC 验证 |
    | `renew_before_days` / `dns_timeout` | 默认临期 30 天续签、传播等待 180 秒；范围分别为 7–60 天、10–300 秒 |
 
-   `FC_CERTBOT_CONFIG=/code/config.json` 指向打包配置；`FC_CERTBOT_STATE_ROOT=/mnt/certbot/state` 必须落在实际 `nfs`/`nfs4` 挂载中。`/tmp`、本地磁盘、OSS 挂载不能承担共享锁，入口会拒绝。staging 与生产使用不同函数、不同 NAS 状态根；不能直接拿 staging 状态切生产。
+   `ESA_CERTBOT_CONFIG=/code/config.json` 指向打包配置；`ESA_CERTBOT_STATE_ROOT=/mnt/certbot/state` 必须落在实际 `nfs`/`nfs4` 挂载中。`/tmp`、本地磁盘、OSS 挂载不能承担共享锁，入口会拒绝。staging 与生产使用不同函数、不同 NAS 状态根；不能直接拿 staging 状态切生产。
+
+   函数计算保留 `FC_` 前缀，不能用此前缀定义部署环境变量；请保持模板中的 `ESA_CERTBOT_` 名称。
 
 5. 构建 Linux x86_64 包，可在 macOS 交叉打包；原生扩展强制使用 Linux wheel，少量纯 Python SDK 源码包使用固定 setuptools/wheel 构建：
 

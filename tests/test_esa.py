@@ -417,11 +417,32 @@ class Tests(unittest.TestCase):
             with self.assertRaisesRegex(Failure, "LOCK_LOST"):
                 old.check()
 
+    def test_handler_uses_fc_allowed_environment_names(self):
+        context = NS(credentials=NS(access_key_id="test", access_key_secret="test",
+                                   security_token="test"), account_id="123456789")
+        evt = {"action": "issue", "target": "api"}
+        with patch.dict(os.environ, {"ESA_CERTBOT_CONFIG": "deployment.json",
+                                     "ESA_CERTBOT_STATE_ROOT": str(self.root)}, clear=True), \
+                patch.object(index, "load", return_value=self.cfg) as load_config, \
+                patch.object(index, "require_nas", return_value=self.root) as check_nas, \
+                patch.object(index, "Cloud", return_value=self.cloud), \
+                patch.object(index, "run", return_value={"status": "uploaded"}) as run, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(index.handler(json.dumps(evt), context), {"status": "uploaded"})
+        load_config.assert_called_once_with("deployment.json")
+        check_nas.assert_called_once_with(str(self.root))
+        self.assertEqual(run.call_args.args[2], self.root)
+        # FC rejects user-defined variables with its reserved FC_ prefix.
+        template = (Path(__file__).parents[1] / "s-esa.example.yaml").read_text()
+        for name in ("ESA_CERTBOT_CONFIG", "ESA_CERTBOT_STATE_ROOT"):
+            self.assertIn(name + ":", template)
+        self.assertNotIn("FC_CERTBOT_", template)
+
     def test_handler_sanitizes_sdk_errors_and_private_values(self):
         context = NS(credentials=NS(access_key_id="SECRET-AK", access_key_secret="SECRET-KEY", security_token="SECRET-STS"), account_id="123456789")
         captured = io.StringIO()
         with patch.object(index, "load", return_value=self.cfg), patch.dict(os.environ, {
-                "FC_CERTBOT_CONFIG": "config", "FC_CERTBOT_STATE_ROOT": str(self.root)}), \
+                "ESA_CERTBOT_CONFIG": "config", "ESA_CERTBOT_STATE_ROOT": str(self.root)}), \
                 patch.object(index, "require_nas", return_value=self.root), \
                 patch.object(index, "Cloud", side_effect=Exception("SECRET-KEY CERTIFICATE BODY")), \
                 contextlib.redirect_stdout(captured):
